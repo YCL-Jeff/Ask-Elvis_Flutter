@@ -46,7 +46,11 @@ class ModelManager {
   /// - Android: Path to .tflite file
   Future<String?> getModelPath(ModelType modelType) async {
     if (Platform.isIOS) {
+<<<<<<< HEAD
       return 'best';
+=======
+      return _getIOSModelPath(modelType);
+>>>>>>> c6dec2b98e2454faad69df13b8da1c76c48729c6
     } else if (Platform.isAndroid) {
       return _getAndroidModelPath(modelType);
     }

@@ -50,6 +50,7 @@ public class YOLO {
     let lowercasedPath = modelPathOrName.lowercased()
     let fileManager = FileManager.default
 
+<<<<<<< HEAD
     // 強制優先用 best.mlpackage
     if let packageURL = Bundle.main.url(forResource: "best", withExtension: "mlpackage") {
       modelURL = packageURL
@@ -58,6 +59,8 @@ public class YOLO {
       print("YOLO Error: 找不到 best.mlpackage in bundle")
     }
 
+=======
+>>>>>>> c6dec2b98e2454faad69df13b8da1c76c48729c6
     // 絶対パスのチェック - mlpackageディレクトリも処理
     if lowercasedPath.hasSuffix(".mlmodel") || lowercasedPath.hasSuffix(".mlpackage") {
       let possibleURL = URL(fileURLWithPath: modelPathOrName)
