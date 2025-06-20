@@ -266,28 +266,14 @@ public class YOLOView: UIView, VideoCaptureDelegate {
     }
 
     guard let unwrappedModelURL = modelURL else {
-      // Model not found - allow camera preview without inference
-      print(
-        "YOLOView Warning: Model file not found: \(modelPathOrName). Camera will run without inference."
-      )
-      self.videoCapture.predictor = nil
-      self.activityIndicator.stopAnimating()
-      self.labelName.text = "No Model"
-      // Call completion with success to allow camera to start
-      completion?(.success(()))
-      return
+      let error = PredictorError.modelFileNotFound
+      fatalError(error.localizedDescription)
     }
 
     modelName = unwrappedModelURL.deletingPathExtension().lastPathComponent
 
     // Common success handling for all tasks
     func handleSuccess(predictor: Predictor) {
-      // Release old predictor before setting new one to prevent memory leak
-      if self.videoCapture.predictor != nil {
-        print("YOLOView: Releasing old predictor before setting new one")
-        self.videoCapture.predictor = nil
-      }
-
       self.videoCapture.predictor = predictor
       self.activityIndicator.stopAnimating()
       self.labelName.text = modelName
@@ -389,9 +375,6 @@ public class YOLOView: UIView, VideoCaptureDelegate {
 
   public func stop() {
     videoCapture.stop()
-    videoCapture.delegate = nil
-    // Release predictor to prevent memory leak
-    videoCapture.predictor = nil
   }
 
   public func resume() {
@@ -1225,29 +1208,6 @@ public class YOLOView: UIView, VideoCaptureDelegate {
 
   public func setInferenceFlag(ok: Bool) {
     videoCapture.inferenceOK = ok
-  }
-
-  deinit {
-    print("YOLOView: deinit called - stopping camera capture")
-
-    // Ensure camera is stopped when view is deallocated
-    videoCapture.stop()
-
-    // Clear delegate to break retain cycle
-    videoCapture.delegate = nil
-
-    // Release predictor to prevent memory leak
-    videoCapture.predictor = nil
-
-    // Clear all callbacks to prevent retain cycles
-    onDetection = nil
-    onStream = nil
-    onZoomChanged = nil
-
-    // Remove notification observers
-    NotificationCenter.default.removeObserver(self)
-
-    print("YOLOView: deinit completed")
   }
 }
 

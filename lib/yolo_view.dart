@@ -204,17 +204,18 @@ class YOLOViewController {
 
   /// Sets the maximum number of items to detect per frame.
   ///
-  /// Limits the number of detections returned to improve
-  /// performance. The value is automatically clamped between 1 and 100.
+  /// Limiting the number of detections can improve performance,
+  /// especially on lower-end devices. The value is automatically
+  /// clamped between 1 and 100.
   ///
   /// Example:
   /// ```dart
-  /// // Limit to 10 detections per frame
+  /// // Only detect up to 10 objects per frame
   /// await controller.setNumItemsThreshold(10);
   /// ```
   Future<void> setNumItemsThreshold(int numItems) async {
-    final clampedNumItems = numItems.clamp(1, 100);
-    _numItemsThreshold = clampedNumItems;
+    final clampedValue = numItems.clamp(1, 100);
+    _numItemsThreshold = clampedValue;
     if (_methodChannel == null) {
       logInfo(
         'YOLOViewController: Warning - Cannot apply numItems threshold, view not yet created',
@@ -223,79 +224,28 @@ class YOLOViewController {
     }
     try {
       await _methodChannel!.invokeMethod('setNumItemsThreshold', {
-        'numItems': clampedNumItems,
+        'numItems': clampedValue,
       });
       logInfo(
         'YOLOViewController: Applied numItems threshold: $_numItemsThreshold',
       );
+      return _applyThresholds();
     } catch (e) {
       logInfo('YOLOViewController: Error applying numItems threshold: $e');
-      return _applyThresholds();
     }
   }
 
-  /// Zooms in the camera view.
+  /// Sets multiple thresholds at once.
   ///
-  /// Increases the zoom level by a fixed amount.
-  /// The actual zoom factor depends on the device's camera capabilities.
-  ///
-  /// Example:
-  /// ```dart
-  /// // Zoom in
-  /// await controller.zoomIn();
-  /// ```
-  Future<void> zoomIn() async {
-    if (_methodChannel == null) {
-      logInfo(
-        'YOLOViewController: Warning - Cannot zoom in, view not yet created',
-      );
-      return;
-    }
-    try {
-      await _methodChannel!.invokeMethod('zoomIn');
-      logInfo('YOLOViewController: Zoomed in');
-    } catch (e) {
-      logInfo('YOLOViewController: Error zooming in: $e');
-    }
-  }
-
-  /// Zooms out the camera view.
-  ///
-  /// Decreases the zoom level by a fixed amount.
-  /// The actual zoom factor depends on the device's camera capabilities.
+  /// This method allows updating multiple thresholds in a single call,
+  /// which is more efficient than setting them individually.
   ///
   /// Example:
   /// ```dart
-  /// // Zoom out
-  /// await controller.zoomOut();
-  /// ```
-  Future<void> zoomOut() async {
-    if (_methodChannel == null) {
-      logInfo(
-        'YOLOViewController: Warning - Cannot zoom out, view not yet created',
-      );
-      return;
-    }
-    try {
-      await _methodChannel!.invokeMethod('zoomOut');
-      logInfo('YOLOViewController: Zoomed out');
-    } catch (e) {
-      logInfo('YOLOViewController: Error zooming out: $e');
-    }
-  }
-
-  /// Sets all thresholds at once.
-  ///
-  /// This is more efficient than setting each threshold individually
-  /// as it only makes one platform channel call.
-  ///
-  /// Example:
-  /// ```dart
-  /// // Set all thresholds at once
   /// await controller.setThresholds(
-  ///   confidenceThreshold: 0.7,
-  ///   iouThreshold: 0.3,
-  ///   numItemsThreshold: 10,
+  ///   confidenceThreshold: 0.6,
+  ///   iouThreshold: 0.4,
+  ///   numItemsThreshold: 20,
   /// );
   /// ```
   Future<void> setThresholds({
@@ -315,15 +265,17 @@ class YOLOViewController {
     return _applyThresholds();
   }
 
-  /// Switches between front and back cameras.
+  /// Switches between front and back camera.
   ///
-  /// Toggles the active camera between the front-facing and
-  /// back-facing cameras. The camera state is maintained by
-  /// the platform view.
+  /// This method toggles the camera between front-facing and back-facing modes.
+  /// Returns a [Future] that completes when the camera has been switched.
   ///
   /// Example:
   /// ```dart
-  /// // Switch to the other camera
+  /// // Create a controller
+  /// final controller = YOLOViewController();
+  ///
+  /// // Switch between front and back camera
   /// await controller.switchCamera();
   /// ```
   Future<void> switchCamera() async {
@@ -335,7 +287,7 @@ class YOLOViewController {
     }
     try {
       await _methodChannel!.invokeMethod('switchCamera');
-      logInfo('YOLOViewController: Switched camera');
+      logInfo('YOLOViewController: Camera switched successfully');
     } catch (e) {
       logInfo('YOLOViewController: Error switching camera: $e');
     }
@@ -397,11 +349,11 @@ class YOLOViewController {
     try {
       logInfo('YoloViewController: Switching model with viewId: $_viewId');
 
-      // Call the platform method on the view's specific method channel
-      await _methodChannel!.invokeMethod('setModel', {
-        'modelPath': modelPath,
-        'task': task.name,
-      });
+      // Call the platform method to switch model
+      await const MethodChannel('yolo_single_image_channel').invokeMethod(
+        'setModel',
+        {'viewId': _viewId, 'modelPath': modelPath, 'task': task.name},
+      );
 
       logInfo(
         'YoloViewController: Model switched successfully to $modelPath with task ${task.name}',
@@ -652,11 +604,6 @@ class YOLOViewState extends State<YOLOView> {
 
   final String _viewId = UniqueKey().toString();
   int? _platformViewId;
-  
-  // Timer to track the delayed subscription timer
-  Timer? _subscriptionTimer;
-  Timer? _recreateTimer;
-  Timer? _errorRetryTimer;
 
   @override
   void initState() {
@@ -728,62 +675,24 @@ class YOLOViewState extends State<YOLOView> {
       _effectiveController
           .switchModel(widget.modelPath, widget.task)
           .catchError((e) {
-        logInfo('YoloView: Error switching model in didUpdateWidget: $e');
-      });
+            logInfo('YoloView: Error switching model in didUpdateWidget: $e');
+          });
     }
   }
 
   @override
   void dispose() {
-    logInfo('YOLOView.dispose() called - starting cleanup');
-
     // Stop camera and inference before disposing
     _effectiveController.stop().catchError((e) {
       logInfo('YOLOView: Error stopping camera during dispose: $e');
     });
 
-    // Cancel event subscriptions with error handling
+    // Cancel event subscriptions
     _cancelResultSubscription();
-    
-    // Cancel any pending subscription timer
-    _subscriptionTimer?.cancel();
-    _subscriptionTimer = null;
-    
-    // Cancel any pending recreate timer
-    _recreateTimer?.cancel();
-    _recreateTimer = null;
-    
-    // Cancel any pending error retry timer
-    _errorRetryTimer?.cancel();
-    _errorRetryTimer = null;
 
     // Clean up method channel handler
-    try {
-      _methodChannel.setMethodCallHandler(null);
-      logInfo('YOLOView: Method channel handler cleared');
-    } catch (e) {
-      logInfo('YOLOView: Error clearing method channel handler: $e');
-    }
+    _methodChannel.setMethodCallHandler(null);
 
-    // Dispose YOLO model instance using viewId as instanceId
-    // This prevents memory leaks by ensuring the model is released from YOLOInstanceManager
-    if (_platformViewId != null) {
-      logInfo(
-        'YOLOView.dispose() - disposing model instance with viewId: $_viewId',
-      );
-      const MethodChannel('yolo_single_image_channel')
-          .invokeMethod('disposeInstance', {'instanceId': _viewId})
-          .then((_) {
-        logInfo(
-          'YOLOView.dispose() - model instance disposed successfully',
-        );
-      })
-          .catchError((e) {
-        logInfo('YOLOView: Error disposing model instance: $e');
-      });
-    }
-
-    logInfo('YOLOView.dispose() completed - calling super.dispose()');
     super.dispose();
   }
 
@@ -807,8 +716,7 @@ class YOLOViewState extends State<YOLOView> {
           'YOLOView: Platform requested recreation of event channel for $_viewId',
         );
         _cancelResultSubscription();
-        _recreateTimer?.cancel();
-        _recreateTimer = Timer(const Duration(milliseconds: 100), () {
+        Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted &&
               (widget.onResult != null ||
                   widget.onPerformanceMetrics != null)) {
@@ -837,147 +745,123 @@ class YOLOViewState extends State<YOLOView> {
       'YOLOView: Setting up event stream listener for channel: ${_resultEventChannel.name}',
     );
 
-    // Cancel any existing subscription timer
-    _subscriptionTimer?.cancel();
+    _resultSubscription = _resultEventChannel.receiveBroadcastStream().listen(
+      (dynamic event) {
+        logInfo('YOLOView: Received event from native platform: $event');
 
-    // IMPORTANT: Test compatibility workaround
-    // Tests expect _resultSubscription to be non-null immediately after calling _subscribeToResults().
-    // However, we need a 200ms delay for EventChannel to be ready on the native side.
-    // Solution: Create a dummy subscription immediately, then replace it with the real one after delay.
-    // TODO: Consider refactoring this when Flutter test framework supports async subscription testing better.
-    final controller = StreamController<dynamic>();
-    _resultSubscription = controller.stream.listen((_) {});
+        if (event is Map && event.containsKey('test')) {
+          logInfo('YOLOView: Received test message: ${event['test']}');
+          return;
+        }
 
-    // Add short delay to wait for EventChannel to be ready on native side
-    // This prevents sink connection failures and MissingPluginException in real app usage
-    _subscriptionTimer = Timer(const Duration(milliseconds: 200), () {
-      if (!mounted) return;
-      
-      // Cancel the dummy subscription and create the real one
-      _resultSubscription?.cancel();
-      
-      _resultSubscription = _resultEventChannel.receiveBroadcastStream().listen(
-        (dynamic event) {
-          logInfo('YOLOView: Received event from native platform: $event');
-
-          if (event is Map && event.containsKey('test')) {
-            logInfo('YOLOView: Received test message: ${event['test']}');
-            return;
-          }
-
-          if (event is Map) {
-            // Priority system: onStreamingData takes precedence
-            if (widget.onStreamingData != null) {
-              try {
-                // Comprehensive mode: Pass all data via onStreamingData
-                final streamData = Map<String, dynamic>.from(event);
-                widget.onStreamingData!(streamData);
-                logInfo(
-                  'YOLOView: Called onStreamingData callback (comprehensive mode) with keys: ${streamData.keys.toList()}',
-                );
-              } catch (e, s) {
-                logInfo('Error processing streaming data: $e');
-                logInfo('Stack trace for streaming error: $s');
-              }
-            } else {
-              // Separated mode: Use individual callbacks
-              logInfo('YOLOView: Using separated callback mode');
-
-              // Handle detection results
-              if (widget.onResult != null && event.containsKey('detections')) {
-                try {
-                  final List<dynamic> detections = event['detections'] ?? [];
-                  logInfo('YOLOView: Received ${detections.length} detections');
-
-                  for (var i = 0; i < detections.length && i < 3; i++) {
-                    final detection = detections[i];
-                    final className = detection['className'] ?? 'unknown';
-                    final confidence = detection['confidence'] ?? 0.0;
-                    logInfo(
-                      'YOLOView: Detection $i - $className (${(confidence * 100).toStringAsFixed(1)}%)',
-                    );
-                  }
-
-                  final results = _parseDetectionResults(event);
-                  logInfo('YOLOView: Parsed results count: ${results.length}');
-                  widget.onResult!(results);
-                  logInfo('YOLOView: Called onResult callback with results');
-                } catch (e, s) {
-                  logInfo('Error parsing detection results: $e');
-                  logInfo('Stack trace for detection error: $s');
-                  logInfo(
-                    'YOLOView: Event keys for detection error: ${event.keys.toList()}',
-                  );
-                  if (event.containsKey('detections')) {
-                    final detections = event['detections'];
-                    logInfo(
-                      'YOLOView: Detections type for error: ${detections.runtimeType}',
-                    );
-                    if (detections is List && detections.isNotEmpty) {
-                      logInfo(
-                        'YOLOView: First detection keys for error: ${detections.first?.keys?.toList()}',
-                      );
-                    }
-                  }
-                }
-              }
-
-              // Handle performance metrics
-              if (widget.onPerformanceMetrics != null) {
-                try {
-                  logInfo(
-                    'YOLOView: 🔍 Raw event data for performance metrics: $event',
-                  );
-                  final metrics = YOLOPerformanceMetrics.fromMap(
-                    Map<String, dynamic>.from(event),
-                  );
-                  widget.onPerformanceMetrics!(metrics);
-                  logInfo(
-                    'YOLOView: Called onPerformanceMetrics callback: ${metrics.toString()}',
-                  );
-                } catch (e, s) {
-                  logInfo('Error parsing performance metrics: $e');
-                  logInfo('Stack trace for metrics error: $s');
-                  logInfo(
-                    'YOLOView: Event keys for metrics error: ${event.keys.toList()}',
-                  );
-                }
-              }
+        if (event is Map) {
+          // Priority system: onStreamingData takes precedence
+          if (widget.onStreamingData != null) {
+            try {
+              // Comprehensive mode: Pass all data via onStreamingData
+              final streamData = Map<String, dynamic>.from(event);
+              widget.onStreamingData!(streamData);
+              logInfo(
+                'YOLOView: Called onStreamingData callback (comprehensive mode) with keys: ${streamData.keys.toList()}',
+              );
+            } catch (e, s) {
+              logInfo('Error processing streaming data: $e');
+              logInfo('Stack trace for streaming error: $s');
             }
           } else {
+            // Separated mode: Use individual callbacks
+            logInfo('YOLOView: Using separated callback mode');
+
+            // Handle detection results
+            if (widget.onResult != null && event.containsKey('detections')) {
+              try {
+                final List<dynamic> detections = event['detections'] ?? [];
+                logInfo('YOLOView: Received ${detections.length} detections');
+
+                for (var i = 0; i < detections.length && i < 3; i++) {
+                  final detection = detections[i];
+                  final className = detection['className'] ?? 'unknown';
+                  final confidence = detection['confidence'] ?? 0.0;
+                  logInfo(
+                    'YOLOView: Detection $i - $className (${(confidence * 100).toStringAsFixed(1)}%)',
+                  );
+                }
+
+                final results = _parseDetectionResults(event);
+                logInfo('YOLOView: Parsed results count: ${results.length}');
+                widget.onResult!(results);
+                logInfo('YOLOView: Called onResult callback with results');
+              } catch (e, s) {
+                logInfo('Error parsing detection results: $e');
+                logInfo('Stack trace for detection error: $s');
+                logInfo(
+                  'YOLOView: Event keys for detection error: ${event.keys.toList()}',
+                );
+                if (event.containsKey('detections')) {
+                  final detections = event['detections'];
+                  logInfo(
+                    'YOLOView: Detections type for error: ${detections.runtimeType}',
+                  );
+                  if (detections is List && detections.isNotEmpty) {
+                    logInfo(
+                      'YOLOView: First detection keys for error: ${detections.first?.keys?.toList()}',
+                    );
+                  }
+                }
+              }
+            }
+
+            // Handle performance metrics
+            if (widget.onPerformanceMetrics != null) {
+              try {
+                logInfo(
+                  'YOLOView: 🔍 Raw event data for performance metrics: $event',
+                );
+                final metrics = YOLOPerformanceMetrics.fromMap(
+                  Map<String, dynamic>.from(event),
+                );
+                widget.onPerformanceMetrics!(metrics);
+                logInfo(
+                  'YOLOView: Called onPerformanceMetrics callback: ${metrics.toString()}',
+                );
+              } catch (e, s) {
+                logInfo('Error parsing performance metrics: $e');
+                logInfo('Stack trace for metrics error: $s');
+                logInfo(
+                  'YOLOView: Event keys for metrics error: ${event.keys.toList()}',
+                );
+              }
+            }
+          }
+        } else {
+          logInfo(
+            'YOLOView: Received invalid event format or no relevant callbacks are set. Event type: ${event.runtimeType}',
+          );
+        }
+      },
+      onError: (dynamic error, StackTrace stackTrace) {
+        // Added StackTrace
+        logInfo('Error from detection results stream: $error');
+        logInfo('Stack trace from stream error: $stackTrace');
+
+        Future.delayed(const Duration(seconds: 2), () {
+          if (_resultSubscription != null && mounted) {
+            // Check mounted before resubscribing
+            logInfo('YOLOView: Attempting to resubscribe after error');
+            _subscribeToResults();
+          } else {
             logInfo(
-              'YOLOView: Received invalid event format or no relevant callbacks are set. Event type: ${event.runtimeType}',
+              'YOLOView: Not resubscribing (stream already null or widget disposed)',
             );
           }
-        },
-        onError: (dynamic error, StackTrace stackTrace) {
-          // Added StackTrace
-          logInfo('Error from detection results stream: $error');
-          logInfo('Stack trace from stream error: $stackTrace');
-
-          _errorRetryTimer?.cancel();
-          _errorRetryTimer = Timer(const Duration(seconds: 2), () {
-            if (_resultSubscription != null && mounted) {
-              // Check mounted before resubscribing
-              logInfo('YOLOView: Attempting to resubscribe after error');
-              _subscribeToResults();
-            } else {
-              logInfo(
-                'YOLOView: Not resubscribing (stream already null or widget disposed)',
-              );
-            }
-          });
-        },
-        onDone: () {
-          logInfo('YOLOView: Event stream closed for $_viewId');
-          _resultSubscription = null;
-        },
-      );
-      logInfo('YOLOView: Event stream listener setup complete for $_viewId');
-      // Close the dummy controller as it's no longer needed
-      // The real EventChannel subscription is now active
-      controller.close();
-    });
+        });
+      },
+      onDone: () {
+        logInfo('YOLOView: Event stream closed for $_viewId');
+        _resultSubscription = null;
+      },
+    );
+    logInfo('YOLOView: Event stream listener setup complete for $_viewId');
   }
 
   @visibleForTesting
@@ -991,10 +875,6 @@ class YOLOViewState extends State<YOLOView> {
       _resultSubscription!.cancel();
       _resultSubscription = null;
     }
-    
-    // Also cancel any pending subscription timer
-    _subscriptionTimer?.cancel();
-    _subscriptionTimer = null;
   }
 
   @visibleForTesting

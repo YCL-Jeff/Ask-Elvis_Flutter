@@ -33,7 +33,7 @@ Add to `pubspec.yaml`:
 dependencies:
   flutter:
     sdk: flutter
-  ultralytics_yolo: ^0.1.25
+  ultralytics_yolo: ^0.1.18
   image_picker: ^0.8.7 # For image selection
 ```
 
@@ -192,9 +192,7 @@ You now have a working YOLO object detection app! The app will:
 3. **Detect objects** in the selected image
 4. **Show results** with class names and confidence scores
 
-## 🚀 Next Steps
-
-### Add Real-time Camera
+## 🚀 Next Steps - Add Real-time Camera
 
 Want real-time detection? Add the YOLOView widget:
 
@@ -209,26 +207,6 @@ YOLOView(
     print('Detected ${results.length} objects');
   },
 )
-```
-
-### Dynamic Model Switching
-
-Switch models without restarting the camera:
-
-```dart
-final controller = YOLOViewController();
-
-YOLOView(
-  modelPath: 'yolo11n',  // Initial model
-  task: YOLOTask.detect,
-  controller: controller,
-  onResult: (results) {
-    print('Detected ${results.length} objects');
-  },
-)
-
-// Later, switch to a different model
-await controller.switchModel('yolo11s', YOLOTask.detect);
 ```
 
 ## 🎯 Multi-Instance Quick Example

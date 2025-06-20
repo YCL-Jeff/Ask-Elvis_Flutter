@@ -3,34 +3,10 @@
 import Flutter
 import UIKit
 
-// Thread-safe view registry
-private class YOLOViewRegistry {
-  private var _views: [Int: YOLOView] = [:]
-  private let lock = NSLock()
-
-  func get(for viewId: Int) -> YOLOView? {
-    lock.lock()
-    defer { lock.unlock() }
-    return _views[viewId]
-  }
-
-  func set(_ view: YOLOView?, for viewId: Int) {
-    lock.lock()
-    defer { lock.unlock() }
-    _views[viewId] = view
-  }
-
-  func remove(for viewId: Int) {
-    lock.lock()
-    defer { lock.unlock() }
-    _views.removeValue(forKey: viewId)
-  }
-}
-
 @MainActor
 public class SwiftYOLOPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
   private var messenger: FlutterBinaryMessenger
-  private static let viewRegistry = YOLOViewRegistry()
+  static var yoloViews: [Int: YOLOView] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     self.messenger = messenger
@@ -38,19 +14,15 @@ public class SwiftYOLOPlatformViewFactory: NSObject, FlutterPlatformViewFactory 
   }
 
   static func getYOLOView(for viewId: Int) -> YOLOView? {
-    return viewRegistry.get(for: viewId)
+    return yoloViews[viewId]
   }
 
   static func register(_ yoloView: YOLOView, for viewId: Int) {
-    viewRegistry.set(yoloView, for: viewId)
+    yoloViews[viewId] = yoloView
   }
 
   static func unregister(for viewId: Int) {
-    viewRegistry.remove(for: viewId)
-  }
-
-  nonisolated static func unregisterSync(for viewId: Int) {
-    viewRegistry.remove(for: viewId)
+    yoloViews.removeValue(forKey: viewId)
   }
 
   public func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {

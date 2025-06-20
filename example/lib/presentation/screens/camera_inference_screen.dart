@@ -1,17 +1,19 @@
 // Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 添加觸覺回饋支援
 import 'package:ultralytics_yolo/yolo_result.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
+import 'package:liquid_glass_renderer/liquid_glass_renderer.dart'; // 添加液態玻璃效果
 import '../../models/model_type.dart';
 import '../../models/slider_type.dart';
 import '../../services/model_manager.dart';
+import 'webview_screen.dart'; // 導入 WebView 頁面
 
 /// A screen that demonstrates real-time YOLO inference using the device camera.
 ///
 /// This screen provides:
 /// - Live camera feed with YOLO object detection
-/// - Model selection (detect, segment, classify, pose, obb)
 /// - Adjustable thresholds (confidence, IoU, max detections)
 /// - Camera controls (flip, zoom)
 /// - Performance metrics (FPS)
@@ -22,7 +24,8 @@ class CameraInferenceScreen extends StatefulWidget {
   State<CameraInferenceScreen> createState() => _CameraInferenceScreenState();
 }
 
-class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
+class _CameraInferenceScreenState extends State<CameraInferenceScreen>
+    with TickerProviderStateMixin {
   int _detectionCount = 0;
   double _confidenceThreshold = 0.5;
   double _iouThreshold = 0.45;
@@ -32,19 +35,30 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
   DateTime _lastFpsUpdate = DateTime.now();
 
   SliderType _activeSlider = SliderType.none;
-  ModelType _selectedModel = ModelType.detect;
   bool _isModelLoading = false;
   String? _modelPath;
   String _loadingMessage = '';
   double _downloadProgress = 0.0;
-  double _currentZoomLevel = 1.0;
-  bool _isFrontCamera = false;
 
   final _yoloController = YOLOViewController();
   final _yoloViewKey = GlobalKey<YOLOViewState>();
   final bool _useController = true;
 
   late final ModelManager _modelManager;
+  
+  // 新增：按鈕動畫控制器
+  late AnimationController _buttonAnimationController;
+  late Animation<double> _buttonScaleAnimation;
+  bool _isButtonPressed = false;
+  
+  // 新增：donkey 偵測狀態
+  bool _hasDonkeyDetected = false;
+  List<YOLOResult> _currentDetections = [];
+  
+  // 新增：identification 狀態和最高機率 donkey 資訊
+  bool _isIdentificationPressed = false;
+  String? _topDonkeyName;
+  double _topDonkeyConfidence = 0.0;
 
   @override
   void initState() {
@@ -87,6 +101,24 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
         );
       }
     });
+
+    // 初始化按鈕動畫控制器
+    _buttonAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _buttonScaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(
+      CurvedAnimation(
+        parent: _buttonAnimationController,
+        curve: Curves.easeOut,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _buttonAnimationController.dispose();
+    super.dispose();
   }
 
   /// Called when new detection results are available
@@ -111,9 +143,34 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       _lastFpsUpdate = now;
     }
 
-    // Still update detection count in the UI
+    // 更新偵測結果和 donkey 狀態
     setState(() {
       _detectionCount = results.length;
+      _currentDetections = results;
+      
+      // 檢查是否有 donkey 被偵測到
+      _hasDonkeyDetected = results.any((result) => 
+        result.className.toLowerCase().contains('donkey') ||
+        result.className.toLowerCase().contains('horse') // 有些模型可能將 donkey 分類為 horse
+      );
+      
+      // 找出最高機率的 donkey
+      if (_hasDonkeyDetected) {
+        var donkeyResults = results.where((result) => 
+          result.className.toLowerCase().contains('donkey') ||
+          result.className.toLowerCase().contains('horse')
+        ).toList();
+        
+        if (donkeyResults.isNotEmpty) {
+          // 按信心度排序，取最高機率的
+          donkeyResults.sort((a, b) => b.confidence.compareTo(a.confidence));
+          _topDonkeyName = donkeyResults.first.className;
+          _topDonkeyConfidence = donkeyResults.first.confidence;
+        }
+      } else {
+        _topDonkeyName = null;
+        _topDonkeyConfidence = 0.0;
+      }
     });
 
     // Debug first few detections
@@ -127,9 +184,6 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final orientation = MediaQuery.of(context).orientation;
-    final isLandscape = orientation == Orientation.landscape;
-
     return Scaffold(
       body: Stack(
         children: [
@@ -141,19 +195,12 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                   : _yoloViewKey,
               controller: _useController ? _yoloController : null,
               modelPath: _modelPath!,
-              task: _selectedModel.task,
+              task: ModelType.detect.task,
               onResult: _onDetectionResults,
               onPerformanceMetrics: (metrics) {
                 if (mounted) {
                   setState(() {
                     _currentFps = metrics.fps;
-                  });
-                }
-              },
-              onZoomChanged: (zoomLevel) {
-                if (mounted) {
-                  setState(() {
-                    _currentZoomLevel = zoomLevel;
                   });
                 }
               },
@@ -202,44 +249,61 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              '${(_downloadProgress * 100).toStringAsFixed(1)}%',
+                              '${(_downloadProgress * 100).toInt()}%',
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: Colors.white70,
                                 fontSize: 14,
                               ),
                             ),
                           ],
-                        ),
+                        )
+                      else
+                        const CircularProgressIndicator(color: Colors.white),
                     ],
                   ),
                 ),
-              ),
-            )
-          else
-            const Center(
-              child: Text(
-                'No model loaded',
-                style: TextStyle(color: Colors.white),
               ),
             ),
 
           // Top info pills (detection, FPS, and current threshold)
           Positioned(
-            top: MediaQuery.of(context).padding.top + (isLandscape ? 8 : 16),
-            left: isLandscape ? 8 : 16,
-            right: isLandscape ? 8 : 16,
+            top: MediaQuery.of(context).padding.top + 16, // Safe area + spacing
+            left: 16,
+            right: 16,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Model selector
-                _buildModelSelector(),
-                SizedBox(height: isLandscape ? 8 : 12),
+                // Ask Elvis 標題
+                Text(
+                  'Ask Elvis',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    shadows: [
+                      Shadow(
+                        offset: Offset(2.0, 2.0),
+                        blurRadius: 4.0,
+                        color: Colors.black54,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // 檢測數量和FPS顯示
                 IgnorePointer(
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      const Text(
+                        'DETECTIONS: ',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       Text(
-                        'DETECTIONS: $_detectionCount',
+                        '$_detectionCount',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w600,
@@ -271,63 +335,196 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
             ),
           ),
 
-          // Center logo - only show when camera is active
+          // Identification 玻璃按鈕 - 放置在螢幕中下方，方便大拇指操作
           if (_modelPath != null && !_isModelLoading)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Align(
-                  alignment: Alignment.center,
-                  child: FractionallySizedBox(
-                    widthFactor: isLandscape ? 0.3 : 0.5,
-                    heightFactor: isLandscape ? 0.3 : 0.5,
-                    child: Image.asset(
-                      'assets/logo.png',
-                      color: Colors.white.withValues(alpha: 0.4),
-                    ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: MediaQuery.of(context).padding.bottom + 100, // 距離底部 100px，加上安全區域
+              child: Align(
+                alignment: Alignment.center,
+                child: GestureDetector(
+                  onTapDown: (_) {
+                    if (_hasDonkeyDetected) {
+                      setState(() {
+                        _isButtonPressed = true;
+                      });
+                      _buttonAnimationController.forward();
+                      // 添加觸覺回饋
+                      HapticFeedback.lightImpact();
+                    }
+                  },
+                  onTapUp: (_) {
+                    if (_hasDonkeyDetected) {
+                      setState(() {
+                        _isButtonPressed = false;
+                        _isIdentificationPressed = true;
+                      });
+                      _buttonAnimationController.reverse();
+                      // 添加觸覺回饋
+                      HapticFeedback.mediumImpact();
+                      // TODO: 處理 Identification 按鈕點擊事件
+                      debugPrint('Identification button tapped');
+                    }
+                  },
+                  onTapCancel: () {
+                    if (_hasDonkeyDetected) {
+                      setState(() {
+                        _isButtonPressed = false;
+                      });
+                      _buttonAnimationController.reverse();
+                    }
+                  },
+                  child: AnimatedBuilder(
+                    animation: _buttonScaleAnimation,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _hasDonkeyDetected ? _buttonScaleAnimation.value : 1.0,
+                        child: LiquidGlass(
+                          shape: LiquidRoundedSuperellipse(
+                            borderRadius: const Radius.circular(40),
+                          ),
+                          child: Container(
+                            width: 200, // 橫向橢圓形，寬度較大
+                            height: 80, // 高度較小，形成橢圓形
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(40), // 圓角等於高度的一半
+                              color: _hasDonkeyDetected 
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.white.withValues(alpha: 0.03), // 反灰時更透明
+                              border: Border.all(
+                                color: _hasDonkeyDetected 
+                                  ? Colors.white.withValues(alpha: 0.6)
+                                  : Colors.white.withValues(alpha: 0.3), // 反灰時邊框更淡
+                                width: 2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _hasDonkeyDetected 
+                                    ? Colors.black54
+                                    : Colors.black26, // 反灰時陰影更淡
+                                  blurRadius: 32,
+                                  offset: const Offset(0, 16),
+                                ),
+                                if (_isButtonPressed && _hasDonkeyDetected)
+                                  BoxShadow(
+                                    color: Colors.white.withValues(alpha: 0.3),
+                                    blurRadius: 20,
+                                    spreadRadius: 2,
+                                  ),
+                              ],
+                            ),
+                            child: Center(
+                              child: Text(
+                                _hasDonkeyDetected ? 'Identification' : 'Please point to a donkey',
+                                style: TextStyle(
+                                  color: _hasDonkeyDetected 
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.6), // 反灰時文字更淡
+                                  fontSize: _hasDonkeyDetected ? 18 : 14, // 反灰時字體更小，確保一行顯示
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8, // 減少字母間距，節省空間
+                                ),
+                                textAlign: TextAlign.center, // 確保文字居中
+                                maxLines: 1, // 強制一行顯示
+                                overflow: TextOverflow.ellipsis, // 如果還是太長，顯示省略號
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),
             ),
 
-          // Control buttons
-          Positioned(
-            bottom: isLandscape ? 16 : 32,
-            right: isLandscape ? 8 : 16,
-            child: Column(
-              children: [
-                if (!_isFrontCamera) ...[
-                  _buildCircleButton(
-                    '${_currentZoomLevel.toStringAsFixed(1)}x',
-                    onPressed: () {
-                      // Cycle through zoom levels: 0.5x -> 1.0x -> 3.0x -> 0.5x
-                      double nextZoom;
-                      if (_currentZoomLevel < 0.75) {
-                        nextZoom = 1.0;
-                      } else if (_currentZoomLevel < 2.0) {
-                        nextZoom = 3.0;
-                      } else {
-                        nextZoom = 0.5;
-                      }
-                      _setZoomLevel(nextZoom);
-                    },
+          // The Donkey Sanctuary 網站導航按鈕 - 底部右側
+          if (_modelPath != null && !_isModelLoading)
+            Positioned(
+              right: 20,
+              bottom: MediaQuery.of(context).padding.bottom + 20,
+              child: GestureDetector(
+                onTap: () {
+                  // 添加觸覺回饋
+                  HapticFeedback.selectionClick();
+                  
+                  if (_isIdentificationPressed && _topDonkeyName != null) {
+                    // 顯示特定 donkey 的網頁
+                    debugPrint('Opening specific donkey page for: $_topDonkeyName (${(_topDonkeyConfidence * 100).toStringAsFixed(1)}%)');
+                    // 開啟 WebView 顯示特定 donkey 的網頁
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => WebViewScreen(
+                          url: 'https://www.thedonkeysanctuary.org.uk/donkeys/${_topDonkeyName?.toLowerCase().replaceAll(' ', '-')}',
+                          title: '$_topDonkeyName Information',
+                        ),
+                      ),
+                    );
+                  } else {
+                    // 顯示 Donkey Sanctuary 首頁
+                    debugPrint('Opening The Donkey Sanctuary homepage');
+                    // 開啟 WebView 顯示 Donkey Sanctuary 首頁
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const WebViewScreen(
+                          url: 'https://www.thedonkeysanctuary.org.uk',
+                          title: 'The Donkey Sanctuary',
+                        ),
+                      ),
+                    );
+                  }
+                },
+                child: LiquidGlass(
+                  shape: LiquidRoundedSuperellipse(
+                    borderRadius: const Radius.circular(20),
                   ),
-                  SizedBox(height: isLandscape ? 8 : 12),
-                ],
-                _buildIconButton(Icons.layers, () {
-                  _toggleSlider(SliderType.numItems);
-                }),
-                SizedBox(height: isLandscape ? 8 : 12),
-                _buildIconButton(Icons.adjust, () {
-                  _toggleSlider(SliderType.confidence);
-                }),
-                SizedBox(height: isLandscape ? 8 : 12),
-                _buildIconButton('assets/iou.png', () {
-                  _toggleSlider(SliderType.iou);
-                }),
-                SizedBox(height: isLandscape ? 16 : 40),
-              ],
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // 縮小內邊距
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(20), // 縮小圓角
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.4),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.language, // 改為地球圖標
+                          color: Colors.white,
+                          size: 16, // 縮小圖標
+                        ),
+                        const SizedBox(width: 6), // 縮小間距
+                        Text(
+                          _isIdentificationPressed && _topDonkeyName != null
+                              ? '${_topDonkeyName} (${(_topDonkeyConfidence * 100).toStringAsFixed(0)}%)'
+                              : 'Donkey Sanctuary',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: _isIdentificationPressed && _topDonkeyName != null ? 10 : 12, // 縮小字體
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
 
           // Bottom slider overlay
           if (_activeSlider != SliderType.none)
@@ -336,9 +533,9 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
               right: 0,
               bottom: 0,
               child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isLandscape ? 16 : 24,
-                  vertical: isLandscape ? 8 : 12,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
                 ),
                 color: Colors.black.withValues(alpha: 0.8),
                 child: SliderTheme(
@@ -363,83 +560,9 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                 ),
               ),
             ),
-
-          // Camera flip top-right
-          Positioned(
-            top: MediaQuery.of(context).padding.top + (isLandscape ? 8 : 16),
-            right: isLandscape ? 8 : 16,
-            child: CircleAvatar(
-              radius: isLandscape ? 20 : 24,
-              backgroundColor: Colors.black.withValues(alpha: 0.5),
-              child: IconButton(
-                icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
-                onPressed: () {
-                  setState(() {
-                    _isFrontCamera = !_isFrontCamera;
-                    // Reset zoom level when switching to front camera
-                    if (_isFrontCamera) {
-                      _currentZoomLevel = 1.0;
-                    }
-                  });
-                  if (_useController) {
-                    _yoloController.switchCamera();
-                  } else {
-                    _yoloViewKey.currentState?.switchCamera();
-                  }
-                },
-              ),
-            ),
-          ),
         ],
       ),
     );
-  }
-
-  /// Builds a circular button with an icon or image
-  ///
-  /// [iconOrAsset] can be either an IconData or an asset path string
-  /// [onPressed] is called when the button is tapped
-  Widget _buildIconButton(dynamic iconOrAsset, VoidCallback onPressed) {
-    return CircleAvatar(
-      radius: 24,
-      backgroundColor: Colors.black.withValues(alpha: 0.2),
-      child: IconButton(
-        icon: iconOrAsset is IconData
-            ? Icon(iconOrAsset, color: Colors.white)
-            : Image.asset(
-                iconOrAsset,
-                width: 24,
-                height: 24,
-                color: Colors.white,
-              ),
-        onPressed: onPressed,
-      ),
-    );
-  }
-
-  /// Builds a circular button with text
-  ///
-  /// [label] is the text to display in the button
-  /// [onPressed] is called when the button is tapped
-  Widget _buildCircleButton(String label, {required VoidCallback onPressed}) {
-    return CircleAvatar(
-      radius: 24,
-      backgroundColor: Colors.black.withValues(alpha: 0.2),
-      child: TextButton(
-        onPressed: onPressed,
-        child: Text(label, style: const TextStyle(color: Colors.white)),
-      ),
-    );
-  }
-
-  /// Toggles the active slider type
-  ///
-  /// If the same slider type is selected again, it will be hidden.
-  /// Otherwise, the new slider type will be shown.
-  void _toggleSlider(SliderType type) {
-    setState(() {
-      _activeSlider = (_activeSlider == type) ? SliderType.none : type;
-    });
   }
 
   /// Builds a pill-shaped container with text
@@ -450,7 +573,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: const BorderRadius.all(Radius.circular(24)),
       ),
       child: Text(
         label,
@@ -472,7 +595,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       case SliderType.iou:
         return _iouThreshold;
       default:
-        return 0;
+        return 0.0;
     }
   }
 
@@ -534,70 +657,10 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     }
   }
 
-  /// Sets the camera zoom level
-  ///
-  /// Updates both the UI state and the YOLO view controller with the new zoom level.
-  void _setZoomLevel(double zoomLevel) {
-    setState(() {
-      _currentZoomLevel = zoomLevel;
-    });
-    if (_useController) {
-      _yoloController.setZoomLevel(zoomLevel);
-    } else {
-      _yoloViewKey.currentState?.setZoomLevel(zoomLevel);
-    }
-  }
-
-  /// Builds the model selector widget
-  ///
-  /// Creates a row of buttons for selecting different YOLO model types.
-  /// Each button shows the model type name and highlights the selected model.
-  Widget _buildModelSelector() {
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: ModelType.values.map((model) {
-          final isSelected = _selectedModel == model;
-          return GestureDetector(
-            onTap: () {
-              if (!_isModelLoading && model != _selectedModel) {
-                setState(() {
-                  _selectedModel = model;
-                });
-                _loadModelForPlatform();
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.white : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                model.name.toUpperCase(),
-                style: TextStyle(
-                  color: isSelected ? Colors.black : Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
   Future<void> _loadModelForPlatform() async {
     setState(() {
       _isModelLoading = true;
-      _loadingMessage = 'Loading ${_selectedModel.modelName} model...';
+      _loadingMessage = 'Loading model...';
       _downloadProgress = 0.0;
       // Reset metrics when switching models
       _detectionCount = 0;
@@ -609,7 +672,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     try {
       // Use ModelManager to get the model path
       // This will automatically download if not found locally
-      final modelPath = await _modelManager.getModelPath(_selectedModel);
+      final modelPath = await _modelManager.getModelPath(ModelType.detect);
 
       if (mounted) {
         setState(() {
@@ -628,7 +691,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
             builder: (context) => AlertDialog(
               title: const Text('Model Not Available'),
               content: Text(
-                'Failed to load ${_selectedModel.modelName} model. Please check your internet connection and try again.',
+                'Failed to load model. Please check your internet connection and try again.',
               ),
               actions: [
                 TextButton(
@@ -654,7 +717,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
           builder: (context) => AlertDialog(
             title: const Text('Model Loading Error'),
             content: Text(
-              'Failed to load ${_selectedModel.modelName} model: ${e.toString()}',
+              'Failed to load model: ${e.toString()}',
             ),
             actions: [
               TextButton(

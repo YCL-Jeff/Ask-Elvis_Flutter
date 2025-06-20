@@ -12,6 +12,12 @@
         android:label="yolo_example"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        
+        <!-- Enable Impeller for liquid_glass_renderer -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="true" />
+            
         <activity
             android:name=".MainActivity"
             android:exported="true"
